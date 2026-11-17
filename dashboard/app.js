@@ -36,23 +36,39 @@
     [D.candidate_count, 'launch candidates'],
     [D.watchlist_size, 'on the watchlist'],
     [rows.length, 'ranked on the board'],
+    [D.priced_peer_count, 'priced peers'],
     [D.live_count, 'already live, set aside']
   ];
   $('stats').innerHTML = stats.map(function (s) {
     return '<div class="stat"><b>' + s[0] + '</b><span>' + s[1] + '</span></div>';
   }).join('');
 
-  // The stated model, in the open.
+  // The stated model, in the open: no constant in it was typed by anyone. The multiples are
+  // measured from the snapshot's own tokened protocols at run time, and the table below shows
+  // every one of them with the number of peers standing behind it.
   var m = D.model;
   $('model-note').innerHTML =
-    '<b>How a row earns its rank.</b> Implied value = TVL x a category multiple ' +
-    '(DEXs ' + m.category_multiples['Dexs'] + ', lending ' + m.category_multiples['Lending'] +
-    ', bridges ' + m.category_multiples['Bridge'] + ', default ' + m.default_multiple + '), ' +
-    'moved by the 7-day change (<code>1 + change x ' + m.momentum_per_pct + '</code>, clamped), ' +
-    'by the length of the pre-token run (up to x' + (m.track_base + m.track_span).toFixed(2) +
-    ' at five years) and by chain reach (+' + (m.reach_per_chain * 100) + '% a chain, five at most). ' +
+    '<b>How a row earns its rank.</b> Each category is priced by its comparables: the tokened ' +
+    'protocols in the snapshot with a market cap recorded are the peers, and a category\'s ' +
+    'multiple is the median of their market cap / TVL, winsorized to [' + m.peer_winsor_lo + ', ' +
+    m.peer_winsor_hi + '] and shrunk toward the all-category median of ' + D.global_median +
+    'x with a weight of ' + m.peer_shrink_k + ' phantom peers, so a thin category borrows the ' +
+    'market\'s price instead of one peer\'s. Implied value = TVL x that multiple, moved by the ' +
+    '7-day change (<code>1 + change x ' + m.momentum_per_pct + '</code>, clamped), by the length ' +
+    'of the pre-token run (up to x' + (m.track_base + m.track_span).toFixed(2) + ' at five years) ' +
+    'and by chain reach (+' + (m.reach_per_chain * 100) + '% a chain, five at most). ' +
     'Snapshot of ' + esc(D.as_of) + '; the watchlist floor is ' + money(D.floor_usd) +
     ' and the board reaches below it on purpose: early is the point of a radar.';
+  $('peers').innerHTML =
+    '<h2>Peer multiples, measured from this snapshot</h2>' +
+    '<div class="peer-grid">' +
+    D.peer_table.map(function (p) {
+      return '<div class="peer"><span class="peer-cat">' + esc(p.category) + '</span>' +
+        '<b>' + p.multiple.toFixed(2) + 'x</b>' +
+        '<span class="peer-n">median ' + p.median.toFixed(2) + 'x · ' + p.peers +
+        (p.peers === 1 ? ' peer' : ' peers') + '</span></div>';
+    }).join('') +
+    '</div>';
 
   // Filter options.
   var cats = {}, chains = {};
@@ -103,6 +119,7 @@
         '<td class="num">' + money(r.tvl_usd) + '</td>' +
         '<td class="num">' + changeCell(r.change_7d) + '</td>' +
         '<td class="num"><b>' + money(r.implied_value_usd) + '</b></td>' +
+        '<td class="num">' + r.peer_multiple.toFixed(2) + 'x</td>' +
         '<td class="num"><span class="scorebar"><i style="width:' + r.radar_score + '%"></i></span>' + r.radar_score + '</td>' +
         '<td>' + signal(r) + '</td></tr>';
     }).join('');
@@ -132,6 +149,17 @@
       '<div class="cell"><b>' + (r.age_days === null ? 'unknown' : r.age_days + ' days') + '</b><span>tracked, no token</span></div>' +
       '<div class="cell"><b>' + esc(r.chains.join(', ')) + '</b><span>chains</span></div>' +
       '</div>' +
+      '<h3>How this value is built</h3>' +
+      '<ul class="build">' +
+      '<li>Anchor: TVL ' + money(r.tvl_usd) + ' x the ' + esc(r.category || 'Uncategorised') +
+      ' peer multiple ' + r.peer_multiple.toFixed(2) + 'x (median of ' + r.peer_count +
+      (r.peer_count === 1 ? ' priced peer' : ' priced peers') + ' in this snapshot, shrunk toward the market median) = <b>' + money(r.anchor_usd) + '</b></li>' +
+      '<li>Momentum x' + r.momentum.toFixed(2) + ' from the 7-day TVL change; track record x' + r.track.toFixed(2) +
+      ' for ' + (r.age_days === null ? 'an unrecorded start date' : r.age_days + ' days tracked with no token') +
+      '; reach x' + r.reach.toFixed(2) + ' for ' + r.chains.length + (r.chains.length === 1 ? ' chain' : ' chains') + '.</li>' +
+      '<li>Anchor moved by those three factors gives the implied value above: what a launch would ' +
+      'be worth if the record stayed as it is, priced the way this market prices its live peers.</li>' +
+      '</ul>' +
       '<h3>How to farm it</h3><ol>' +
       r.farm_steps.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('') +
       '</ol>';
