@@ -4,7 +4,7 @@
 [![rank](https://make.fun/badge/token-radar-01/konongxyz/token-radar-01/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 [![reward](https://make.fun/badge/token-radar-01/konongxyz/token-radar-01/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 
-Launch Radar — a token launch radar that ranks 191 pre-token protocols from a sealed DefiLlama snapshot by implied launch value, each with a concrete farm plan, plus a fully offline dashboard. Watchlist coverage 40/40.
+Launch Radar — a token launch radar that ranks 198 pre-token protocols from a sealed DefiLlama snapshot by implied launch value, each with a concrete farm plan, plus a fully offline dashboard. Watchlist coverage 40/40.
 
 ## Run it
 
@@ -22,9 +22,10 @@ A token launch radar for make.fun's "Build the best token launch radar" bounty.
 `main.ts` (Node 22, standard library only) reads the sealed DefiLlama snapshot
 at `/input/snapshot.json` and writes, into `/output`:
 
-- `board.json` — the ranked board: every protocol on the snapshot's watchlist
-  plus the strongest pre-token protocols below its $50M floor, each with an
-  implied launch value and a concrete farm plan;
+- `board.json` — the ranked board: every launch candidate the snapshot
+  holds, the watchlist's 40 first among equals and the rest down to the
+  snapshot's own $5M floor, each with an implied launch value and a concrete
+  farm plan;
 - `data.js` — the same board in the form the dashboard reads;
 - `dashboard/` — a static page (board, filters, sort, per-protocol detail
   view) that renders with no network;
@@ -34,19 +35,29 @@ at `/input/snapshot.json` and writes, into `/output`:
 ## The model
 
 A protocol is a target when the snapshot records no token for it. Implied
-value is built only from the snapshot's figures:
+value is built only from the snapshot's figures, and no multiple in it is a
+constant anyone typed: the snapshot's 128 tokened protocols with a market
+cap recorded are the comparables, and they price the rest.
 
-- anchor = TVL × a per-category multiple (DEXs 1.1, lending 0.8, bridges
-  0.35, default 0.5);
+- multiple = the category's peer multiple: the median market-cap/TVL of
+  its priced peers, each peer ratio winsorized to [0.01, 5] so a dust-TVL
+  outlier cannot set a price, then shrunk toward the all-category median
+  (0.214×) with a weight of 4 phantom peers, so a category priced by one
+  peer borrows most of its price from the whole market; a category with no
+  priced peers takes the all-category median; the result is clamped to
+  [0.02, 2.5];
+- anchor = TVL × that multiple;
 - momentum = 1 + clamp(7-day change, −40…80) × 0.004;
 - track = 0.72 + 0.28 × min(days tracked, 1825) / 1825 — years run with no
   token recorded counts as evidence;
 - reach = 1 + 4% per extra chain, up to five.
 
-The constants live in `lib/model.ts` and are printed on the dashboard itself.
-Protocols that already record a token are counted and set aside, never
-ranked: the radar's question is what a launch would be worth, and what a
-reader should do about it before it happens.
+The peer table is computed from the snapshot at run time in `lib/model.ts`
+(`peerTable`) and printed in full on the dashboard, with the peer count
+behind every multiple, so a reader can disagree with any of it in the open.
+Protocols that already record a token are counted, priced as comparables
+and set aside, never ranked: the radar's question is what a launch would
+be worth, and what a reader should do about it before it happens.
 
 ## Run it
 
