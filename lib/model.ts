@@ -1,19 +1,28 @@
 // Launch Radar model: one sealed snapshot in, one ranked board of pre-token protocols out.
 //
 // A protocol is a radar target when the snapshot records no token for it (both gecko_id and symbol
-// null). Protocols that already record a token are counted as the live set and never ranked: the
-// radar answers "what would a launch be worth, and what do I do about it", not "what trades today".
+// null). Protocols that already record a token are never ranked — but they are not wasted: they are
+// the comparables. The snapshot holds 128 tokened protocols with a market cap recorded, and what the
+// market pays for a dollar of their TVL, category by category, is the only honest price list for a
+// launch that has not happened yet.
 //
-// Implied value is built only from the snapshot's own figures, in four stated factors:
+// Implied value is built only from the snapshot's own figures:
 //
-//   anchor    = tvl_usd x CATEGORY_MULTIPLE[category]   what a launch in this category is anchored to
+//   multiple  = the category's peer multiple: the median market-cap/TVL of the tokened protocols
+//               in the same category, each peer ratio first winsorized to [0.01, 5] so a dust-TVL
+//               outlier cannot set a price, then shrunk toward the all-category median with a
+//               weight of PEER_SHRINK_K phantom peers, so a category priced by one or two peers
+//               borrows most of its price from the whole market. A category with no priced peers
+//               takes the all-category median. The result is clamped to [0.02, 2.5].
+//   anchor    = tvl_usd x multiple                 what comparable launches say this TVL is worth
 //   momentum  = 1 + clamp(change_7d, -40, 80) x 0.004   a week of growth lifts the claim, a slide cuts it
 //   track     = 0.72 + 0.28 x min(age_days, 1825)/1825  years run with no token is evidence, not a gap
 //   reach     = 1 + 0.04 x min(chains - 1, 5)           each extra chain is distribution a launch inherits
 //   implied   = round(anchor x momentum x track x reach), at least 1,000
 //
-// No protocol name is ever special-cased: one function scores every row, and the dashboard prints
-// the constants so a reader can disagree with them in the open.
+// No protocol name is ever special-cased and no multiple is a constant anyone typed: one function
+// scores every row, the peer table is computed from the snapshot at run time, and the dashboard
+// prints the whole table so a reader can disagree with it in the open.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -52,17 +61,31 @@ export interface BoardRow {
   age_days: number | null;
   watchlist: boolean;
   radar_score: number;
+  /** The comparables multiple applied to this row's TVL, and how many priced peers stand behind it. */
+  peer_multiple: number;
+  peer_count: number;
+  /** The four stated factors of the implied value, so the detail view can show the working. */
+  anchor_usd: number;
+  momentum: number;
+  track: number;
+  reach: number;
+}
+
+/** One category's peer pricing: the raw median, the shrunk multiple actually used, the evidence. */
+export interface PeerRow {
+  category: string;
+  peers: number;
+  median: number;
+  multiple: number;
 }
 
 /** The model's stated constants, printed on the dashboard's model panel. */
 export const MODEL = {
-  default_multiple: 0.5,
-  category_multiples: {
-    'Dexs': 1.1, 'Derivatives': 0.95, 'Lending': 0.8, 'CDP': 0.75, 'Chain': 1.2,
-    'RWA': 0.6, 'Yield': 0.55, 'Yield Aggregator': 0.55, 'Onchain Capital Allocator': 0.5,
-    'Risk Curators': 0.45, 'Liquid Staking': 0.4, 'Bridge': 0.35, 'Canonical Bridge': 0.3,
-    'Launchpad': 0.9, 'NFT Lending': 0.65, 'Payments': 0.7, 'Gaming': 0.85,
-  } as Record<string, number>,
+  peer_winsor_lo: 0.01,
+  peer_winsor_hi: 5,
+  peer_shrink_k: 4,
+  multiple_floor: 0.02,
+  multiple_cap: 2.5,
   momentum_per_pct: 0.004,
   momentum_floor: -40,
   momentum_cap: 80,
@@ -73,7 +96,6 @@ export const MODEL = {
   reach_per_chain: 0.04,
   reach_max_chains: 5,
   min_implied_usd: 1000,
-  min_tvl_usd: 6_000_000,
   max_rows: 300,
 };
 
@@ -99,9 +121,62 @@ function clamp(x: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, x));
 }
 
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+}
+
+function round3(x: number): number {
+  return Math.round(x * 1000) / 1000;
+}
+
 /** True when the snapshot records no token for the protocol. */
 export function recordsNoToken(p: SnapshotProtocol): boolean {
   return p.gecko_id === null && p.symbol === null;
+}
+
+/**
+ * The comparables table, derived from the snapshot itself: every tokened protocol with a market
+ * cap recorded is a priced peer. Returns the per-category rows (sorted by category name), the
+ * all-category median the shrinkage leans on, and a lookup from category to its shrunk multiple
+ * and peer count. Protocols whose category the snapshot leaves null form their own peer group.
+ */
+export function peerTable(snapshot: Snapshot): { rows: PeerRow[]; globalMedian: number; byCategory: Map<string | null, PeerRow> } {
+  const ratios = new Map<string | null, number[]>();
+  const all: number[] = [];
+  for (const p of snapshot.protocols) {
+    if (recordsNoToken(p) || p.mcap_usd === null || p.mcap_usd <= 0 || p.tvl_usd <= 0) continue;
+    const ratio = clamp(p.mcap_usd / p.tvl_usd, MODEL.peer_winsor_lo, MODEL.peer_winsor_hi);
+    all.push(ratio);
+    const list = ratios.get(p.category) ?? [];
+    list.push(ratio);
+    ratios.set(p.category, list);
+  }
+  const globalMedian = all.length > 0 ? median(all) : 0.2;
+  const byCategory = new Map<string | null, PeerRow>();
+  for (const [category, list] of ratios) {
+    const med = median(list);
+    const shrunk = (list.length * med + MODEL.peer_shrink_k * globalMedian) / (list.length + MODEL.peer_shrink_k);
+    byCategory.set(category, {
+      category: category ?? 'Uncategorised',
+      peers: list.length,
+      median: med,
+      multiple: clamp(shrunk, MODEL.multiple_floor, MODEL.multiple_cap),
+    });
+  }
+  const rows = [...byCategory.values()].sort((a, b) => (a.category < b.category ? -1 : 1));
+  return { rows, globalMedian, byCategory };
+}
+
+/** The multiple and peer count a protocol is priced with: its category's, or the market's fallback. */
+function multipleFor(
+  p: SnapshotProtocol,
+  peers: { globalMedian: number; byCategory: Map<string | null, PeerRow> },
+): { multiple: number; peers: number } {
+  const row = peers.byCategory.get(p.category);
+  if (row !== undefined) return { multiple: row.multiple, peers: row.peers };
+  return { multiple: clamp(peers.globalMedian, MODEL.multiple_floor, MODEL.multiple_cap), peers: 0 };
 }
 
 /** Categories the snapshot's own field guide treats as products of a token that already trades. */
@@ -126,17 +201,34 @@ export function isLaunchCandidate(p: SnapshotProtocol): boolean {
   return true;
 }
 
-/** The four model factors for one protocol, each stated so the page can show its work. */
-export function impliedValue(p: SnapshotProtocol, asOf: string): { value: number; ageDays: number | null } {
-  const multiple = (p.category !== null ? MODEL.category_multiples[p.category] : undefined) ?? MODEL.default_multiple;
+/** The stated factors of one protocol's implied value, each kept so the page can show its work. */
+export interface ValueFactors {
+  value: number;
+  ageDays: number | null;
+  multiple: number;
+  peerCount: number;
+  anchor: number;
+  momentum: number;
+  track: number;
+  reach: number;
+}
+
+/** Price one protocol from the snapshot's figures and the derived peer table. */
+export function impliedValue(
+  p: SnapshotProtocol,
+  asOf: string,
+  peers: { globalMedian: number; byCategory: Map<string | null, PeerRow> },
+): ValueFactors {
+  const { multiple, peers: peerCount } = multipleFor(p, peers);
+  const anchor = p.tvl_usd * multiple;
   const change = p.change_7d === null ? 0 : clamp(p.change_7d, MODEL.momentum_floor, MODEL.momentum_cap);
   const momentum = 1 + change * MODEL.momentum_per_pct;
   const ageDays = daysBetween(p.listed_at, asOf);
   const age = ageDays === null ? MODEL.unknown_age_days : ageDays;
   const track = MODEL.track_base + MODEL.track_span * (Math.min(age, MODEL.track_full_days) / MODEL.track_full_days);
   const reach = 1 + MODEL.reach_per_chain * Math.min(Math.max(p.chains.length - 1, 0), MODEL.reach_max_chains);
-  const value = Math.max(MODEL.min_implied_usd, Math.round(p.tvl_usd * multiple * momentum * track * reach));
-  return { value, ageDays };
+  const value = Math.max(MODEL.min_implied_usd, Math.round(anchor * momentum * track * reach));
+  return { value, ageDays, multiple, peerCount, anchor: Math.round(anchor), momentum, track, reach };
 }
 
 /** Gas class of a chain, for honest cost lines in the farm plans. */
@@ -145,6 +237,14 @@ function gasLine(chain: string): string {
   if (chain === 'Solana') return 'Solana fees run about $0.05 a transaction';
   if (chain === 'Bitcoin') return 'Bitcoin fees run $1 to $10 a transaction';
   return `${chain} gas runs about $0.05 to $0.50 a transaction`;
+}
+
+/** Per-transaction fee range of a chain, for the campaign's all-in cost line. */
+function feeRange(chain: string): [number, number] {
+  if (chain === 'Ethereum') return [4, 25];
+  if (chain === 'Solana') return [0.05, 0.05];
+  if (chain === 'Bitcoin') return [1, 10];
+  return [0.05, 0.5];
 }
 
 /** Position size a small farmer can defend, scaled to the protocol's own TVL. */
@@ -188,20 +288,31 @@ function coreAction(p: SnapshotProtocol): string {
   }
 }
 
-/** A concrete five-step farm plan for one protocol, every step with a cost or a duration. */
-export function farmSteps(p: SnapshotProtocol, asOf: string): string[] {
+/** What this protocol's own snapshot week says about sizing the campaign. */
+function momentumLine(p: SnapshotProtocol): string {
+  if (p.change_7d === null) return 'DefiLlama reports no seven-day change for it, so there is no momentum signal to size by; keep to the middle of the stake range.';
+  if (p.change_7d >= 10) return `Its TVL climbed ${p.change_7d.toFixed(1)}% in the snapshot's week: interest is building, so start in the first week rather than after any launch announcement, when the crowd arrives.`;
+  if (p.change_7d <= -10) return `Its TVL fell ${Math.abs(p.change_7d).toFixed(1)}% in the snapshot's week: keep size at the low end of the range until the slide stops, and re-check before adding.`;
+  return `Its TVL moved ${p.change_7d >= 0 ? '+' : ''}${p.change_7d.toFixed(1)}% in the snapshot's week: no strong momentum either way, so the steady weekly rhythm matters more than timing.`;
+}
+
+/** A concrete six-step farm plan for one protocol, every step with a cost or a duration. */
+export function farmSteps(p: SnapshotProtocol, asOf: string, peers: { globalMedian: number; byCategory: Map<string | null, PeerRow> }): string[] {
   const chain = p.chains[0] ?? 'Ethereum';
   const chainList = p.chains.length > 1 ? `${chain} (it also runs on ${p.chains.slice(1, 3).join(' and ')})` : chain;
-  const { ageDays } = impliedValue(p, asOf);
+  const { ageDays } = impliedValue(p, asOf, peers);
   const ageLine = ageDays === null
     ? 'DefiLlama gives no start date for it, so treat its history as unproven and size down.'
     : `It has run ${ageDays} days with no token recorded, which is the track record this plan leans on.`;
+  const [feeLo, feeHi] = feeRange(chain);
+  const fees = `$${Math.max(1, Math.round(feeLo * 24))} to $${Math.round(feeHi * 24)}`;
   return [
     `Set up one clean wallet for ${p.name} on ${chainList} and fund it before you touch the product: ${gasLine(chain)}, so budget the stake plus roughly ten transactions of fees. ${ageLine}`,
     coreAction(p),
-    `Repeat the core action on a weekly rhythm for eight to twelve weeks, about 15 minutes a session, varying amounts and times of day so the pattern reads as use, not farming theatre.`,
+    `Repeat the core action on a weekly rhythm for eight to twelve weeks, about 15 minutes a session, varying amounts and times of day so the pattern reads as use, not farming theatre. ${momentumLine(p)}`,
     `Keep a simple log of every transaction hash, date and fee from the first week: if ${p.name} ever snapshots its users, the log is your proof and your memory of what the campaign cost.`,
     `From month two, check ${p.name}'s official channels once a week for a points programme, a testnet or a governance forum opening; early, documented users are the ones a launch can find, and a claim window is often short.`,
+    `All-in for the twelve weeks: a stake of ${stakeLine(p.tvl_usd)} (withdrawable wherever the product allows), about ${fees} of network fees across roughly 24 transactions on ${chain}, and near three hours of your time; if no token ever comes, the fees and the time are the whole loss.`,
   ];
 }
 
@@ -214,28 +325,31 @@ export interface RadarData {
   pre_token_count: number;
   candidate_count: number;
   live_count: number;
+  priced_peer_count: number;
   watchlist_size: number;
   rows: BoardRow[];
   model: typeof MODEL;
+  peer_table: PeerRow[];
+  global_median: number;
 }
 
 /**
- * Build the ranked board: every watchlist protocol, plus the strongest pre-token protocols below
- * the floor, ranked by implied value. Tokened protocols are counted and set aside, never ranked.
+ * Build the ranked board: every launch candidate the snapshot holds — the watchlist first among
+ * equals — ranked by implied value. Tokened protocols are counted, priced as comparables and set
+ * aside, never ranked. Every candidate is ranked, down to the snapshot's own $5M floor: the floor
+ * is the watchlist's line, and a radar that stops at it finds nothing early.
  */
 export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: RadarData } {
   const watch = new Set(snapshot.watchlist);
   const preToken = snapshot.protocols.filter(recordsNoToken);
   const live = snapshot.protocols.length - preToken.length;
   const candidates = preToken.filter(isLaunchCandidate);
+  const peers = peerTable(snapshot);
+  const pricedPeerCount = peers.rows.reduce((n, r) => n + r.peers, 0);
 
   const scored = candidates
-    .filter((p) => watch.has(p.slug) || p.tvl_usd >= MODEL.min_tvl_usd)
-    .map((p) => {
-      const { value, ageDays } = impliedValue(p, snapshot.as_of);
-      return { p, value, ageDays };
-    })
-    .sort((a, b) => b.value - a.value || b.p.tvl_usd - a.p.tvl_usd || (a.p.slug < b.p.slug ? -1 : 1))
+    .map((p) => ({ p, f: impliedValue(p, snapshot.as_of, peers) }))
+    .sort((a, b) => b.f.value - a.f.value || b.p.tvl_usd - a.p.tvl_usd || (a.p.slug < b.p.slug ? -1 : 1))
     .slice(0, MODEL.max_rows);
 
   // Radar score: a 0-100 blend a reader can sort by, from log TVL, momentum and the watchlist flag.
@@ -245,7 +359,7 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
   const board: BoardRow[] = [];
   let previous = Number.POSITIVE_INFINITY;
   scored.forEach((s, i) => {
-    let value = Math.min(s.value, previous - 1);
+    let value = Math.min(s.f.value, previous - 1);
     if (value < 1) value = 1;
     previous = value;
     const tvlPart = maxLog === minLog ? 0.5 : (Math.log10(s.p.tvl_usd) - minLog) / (maxLog - minLog);
@@ -256,14 +370,20 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       name: s.p.name,
       rank: i + 1,
       implied_value_usd: value,
-      farm_steps: farmSteps(s.p, snapshot.as_of),
+      farm_steps: farmSteps(s.p, snapshot.as_of, peers),
       category: s.p.category,
       chains: s.p.chains,
       tvl_usd: s.p.tvl_usd,
       change_7d: s.p.change_7d,
-      age_days: s.ageDays,
+      age_days: s.f.ageDays,
       watchlist: watch.has(s.p.slug),
       radar_score: score,
+      peer_multiple: round3(s.f.multiple),
+      peer_count: s.f.peerCount,
+      anchor_usd: s.f.anchor,
+      momentum: round3(s.f.momentum),
+      track: round3(s.f.track),
+      reach: round3(s.f.reach),
     });
   });
 
@@ -275,9 +395,12 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     pre_token_count: preToken.length,
     candidate_count: candidates.length,
     live_count: live,
+    priced_peer_count: pricedPeerCount,
     watchlist_size: snapshot.watchlist.length,
     rows: board,
     model: MODEL,
+    peer_table: peers.rows,
+    global_median: round3(peers.globalMedian),
   };
   return { board, radar };
 }
