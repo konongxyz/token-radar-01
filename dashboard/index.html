@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Launch Radar — pre-token protocols ranked by implied launch value</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="masthead">
+  <div class="brand">
+    <div class="sweep" aria-hidden="true"></div>
+    <div>
+      <h1>Launch Radar</h1>
+      <p class="tagline">Protocols that record no token yet, ranked by what a launch would be worth — and how to farm each one before it happens.</p>
+    </div>
+  </div>
+  <div class="stats" id="stats" aria-label="Snapshot summary"></div>
+</header>
+
+<section class="model-note" id="model-note" aria-label="How the ranking works"></section>
+
+<nav class="controls" aria-label="Board controls">
+  <label>Search <input id="q" type="search" placeholder="name or slug"></label>
+  <label>Category <select id="category"><option value="">All categories</option></select></label>
+  <label>Chain <select id="chain"><option value="">All chains</option></select></label>
+  <label class="check"><input id="watch-only" type="checkbox"> Watchlist only</label>
+  <label>Sort <select id="sort">
+    <option value="rank">Implied value</option>
+    <option value="score">Radar score</option>
+    <option value="tvl">TVL</option>
+    <option value="change">7d change</option>
+    <option value="age">Track record</option>
+  </select></label>
+  <span class="count" id="count" role="status"></span>
+</nav>
+
+<main>
+  <table class="board" id="board">
+    <thead><tr>
+      <th class="num">#</th><th>Protocol</th><th>Category</th><th class="num">TVL</th>
+      <th class="num">7d</th><th class="num">Implied value</th><th class="num">Radar</th><th>Signal</th>
+    </tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <p class="empty" id="empty" hidden>No protocol matches that filter. Loosen it — the radar sees everything the snapshot holds.</p>
+</main>
+
+<section class="detail" id="detail" hidden aria-label="Protocol detail"></section>
+
+<footer>
+  <p>Implied value is this radar's own claim, worked out from the snapshot's figures alone: TVL, seven-day change, chains and the length of the run with no token recorded. It is not a prediction that a token will be issued, or when. A protocol is listed when DefiLlama records no token for it; a record can lag the world, so check before you act.</p>
+</footer>
+
+<script src="../data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
