@@ -3,57 +3,74 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Launch Radar — pre-token protocols ranked by implied launch value</title>
+<title>Launch Radar &mdash; every pre-token protocol, priced by a fitted comps model</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<header class="masthead">
-  <div class="brand">
-    <div class="sweep" aria-hidden="true"></div>
-    <div>
-      <h1>Launch Radar</h1>
-      <p class="tagline">Protocols that record no token yet, ranked by what a launch would be worth — and how to farm each one before it happens.</p>
-    </div>
+<header class="mast">
+  <div class="mast-in">
+    <h1>Launch Radar</h1>
+    <p class="sub">Every protocol in the snapshot that has no token yet, priced by a comparables model
+    fitted on the ones that do &mdash; and tested on the page, not asserted.</p>
+    <p class="meta" id="meta"></p>
+    <div class="stats" id="stats"></div>
+    <div class="tested" id="tested"></div>
   </div>
-  <div class="stats" id="stats" aria-label="Snapshot summary"></div>
 </header>
-
-<section class="model-note" id="model-note" aria-label="How the ranking works"></section>
-
-<section class="peers" id="peers" aria-label="Peer multiples derived from the snapshot"></section>
-
-<nav class="controls" aria-label="Board controls">
-  <label>Search <input id="q" type="search" placeholder="name or slug"></label>
-  <label>Category <select id="category"><option value="">All categories</option></select></label>
-  <label>Chain <select id="chain"><option value="">All chains</option></select></label>
-  <label class="check"><input id="watch-only" type="checkbox"> Watchlist only</label>
-  <label>Sort <select id="sort">
-    <option value="rank">Implied value</option>
-    <option value="score">Radar score</option>
-    <option value="tvl">TVL</option>
-    <option value="change">7d change</option>
-    <option value="age">Track record</option>
-  </select></label>
-  <span class="count" id="count" role="status"></span>
-</nav>
-
 <main>
-  <table class="board" id="board">
-    <thead><tr>
-      <th class="num">#</th><th>Protocol</th><th>Category</th><th class="num">TVL</th>
-      <th class="num">7d</th><th class="num">Implied value</th><th class="num">Peer x</th><th class="num">Radar</th><th>Signal</th>
-    </tr></thead>
-    <tbody id="rows"></tbody>
-  </table>
-  <p class="empty" id="empty" hidden>No protocol matches that filter. Loosen it — the radar sees everything the snapshot holds.</p>
+  <section class="controls" aria-label="Board controls">
+    <div class="views" role="tablist">
+      <button type="button" id="view-board" class="view on">Pre-token board</button>
+      <button type="button" id="view-live" class="view">Already live</button>
+    </div>
+    <label class="ctl grow">Search <input id="q" type="search" placeholder="name or slug"></label>
+    <label class="ctl">Category <select id="cat"></select></label>
+    <label class="ctl">Chain <select id="chain"></select></label>
+    <label class="ctl check"><input id="watch" type="checkbox"> Watchlist only</label>
+    <label class="ctl check"><input id="hideflag" type="checkbox"> Hide flagged</label>
+    <label class="ctl">Sort by
+      <select id="sort">
+        <option value="value">implied value</option>
+        <option value="tvl">TVL</option>
+        <option value="change">7-day change</option>
+        <option value="age">days run, no token</option>
+      </select>
+    </label>
+  </section>
+  <p class="count" id="count"></p>
+  <section id="board-wrap">
+    <table class="board" id="board">
+      <thead><tr>
+        <th class="num">#</th><th>Protocol</th><th>Category</th><th>Chains</th>
+        <th class="num">TVL</th><th class="num">7d</th><th class="num">Days, no token</th>
+        <th class="num">Curve value</th><th class="num">Category &times;</th>
+        <th class="num">Implied value</th><th>Status</th>
+      </tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </section>
+  <section id="live-wrap" hidden>
+    <p class="live-note">These protocols already have a token, so they are never ranked. They are the
+    comparables the model is fitted on &mdash; 128 of them carry a recorded market cap &mdash; and they are listed
+    here by name, with their own figures, because a radar that counts what it cannot show is asking
+    to be trusted.</p>
+    <table class="board" id="live-table">
+      <thead><tr>
+        <th>Protocol</th><th>Symbol</th><th>Category</th><th class="num">TVL</th>
+        <th class="num">7d</th><th class="num">Market cap</th><th class="num">Mcap / TVL</th>
+      </tr></thead>
+      <tbody id="live-body"></tbody>
+    </table>
+  </section>
+  <section class="method" id="method"></section>
+  <footer>
+    <p>Implied value is a comparables estimate for a token that does not exist, fitted on protocols
+    that launched &mdash; it is not a prediction that a launch will happen, and it is not financial advice.
+    The model's own tests, printed above, put its typical miss at several-fold; read them before the
+    ranks.</p>
+  </footer>
 </main>
-
-<section class="detail" id="detail" hidden aria-label="Protocol detail"></section>
-
-<footer>
-  <p>Implied value is this radar's own claim, worked out from the snapshot's figures alone: TVL, seven-day change, chains and the length of the run with no token recorded. It is not a prediction that a token will be issued, or when. A protocol is listed when DefiLlama records no token for it; a record can lag the world, so check before you act.</p>
-</footer>
-
+<div class="detail" id="detail" hidden></div>
 <script src="../data.js"></script>
 <script src="app.js"></script>
 </body>

@@ -1,10 +1,11 @@
 // Launch Radar entry point (Node 22, standard library only).
 //
-// Reads the sealed snapshot (/input/snapshot.json, or --input <file|dir>), scores every pre-token
-// protocol with lib/model.ts, writes the ranked board to /output/board.json and the dashboard's
-// data to /output/data.js, copies dashboard/ and screenshots/ into /output, and finishes with
-// /output/dossier.json from the vendored make.fun library. The run is a pure function of the
-// snapshot bytes: run it twice and the outputs are identical, byte for byte.
+// Reads the sealed snapshot (/input/snapshot.json, or --input <file|dir>), fits the comps model
+// of lib/model.ts on the snapshot's priced peers, ranks every pre-token protocol, writes the
+// ranked board to /output/board.json and the dashboard's data to /output/data.js, copies
+// dashboard/ and screenshots/ into /output, and finishes with /output/dossier.json from the
+// vendored make.fun library. The run is a pure function of the snapshot bytes: run it twice and
+// the outputs are identical, byte for byte.
 //
 // Locally:  mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input <kit>/input/snapshot.json
 
@@ -85,7 +86,8 @@ writeFileSync(
 );
 
 process.stdout.write(
-  `launch radar: ${snapshot.protocols.length} protocols read, ${radar.pre_token_count} record no token, ${radar.candidate_count} of them launch candidates, ${radar.live_count} already live\n` +
+  `launch radar: ${snapshot.protocols.length} protocols read, ${radar.pre_token_count} record no token, all ${radar.ranked_count} of them ranked (${radar.flagged_count} flagged as products of live tokens), ${radar.live_count} already live\n` +
+    `launch radar: model fitted on ${radar.priced_peer_count} priced peers (slope ${radar.fit.slope}); leave-one-out median miss x${radar.validation.loo_curve.median_miss_x}; walk-forward ${radar.validation.walk_forward.map((w) => `${w.cutoff} x${w.curve.median_miss_x}`).join(', ')}\n` +
     `launch radar: board of ${board.length} rows (all ${snapshot.watchlist.length} watchlist protocols covered), top claim ${board[0]!.name} at $${board[0]!.implied_value_usd.toLocaleString('en-US')}\n` +
     `launch radar: wrote board.json, data.js, dashboard/ (${pageFiles.length} files), screenshots/ (${shots.length} images), dossier.json under ${out}\n`,
 );
